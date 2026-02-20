@@ -35,7 +35,17 @@ def _call(cls: type[BaseChatModel], **kwargs: Any) -> BaseChatModel:
     return cls(**kwargs)
 
 
+def _create_rainymodel(cls: type[BaseChatModel], **kwargs: Any) -> BaseChatModel:
+    """Create a RainyModel instance using ChatOpenAI with rm.orcest.ai base_url."""
+    import os
+    base_url = os.getenv("RAINYMODEL_BASE_URL", "https://rm.orcest.ai/v1")
+    api_key = kwargs.pop("api_key", None) or os.getenv("RAINYMODEL_API_KEY", "")
+    model = kwargs.pop("model", "rainymodel/auto")
+    return cls(base_url=base_url, api_key=api_key, model=model, **kwargs)
+
+
 _BUILTIN_PROVIDERS: dict[str, tuple[str, str, Callable[..., BaseChatModel]]] = {
+    "rainymodel": ("langchain_openai", "ChatOpenAI", _create_rainymodel),
     "anthropic": ("langchain_anthropic", "ChatAnthropic", _call),
     "azure_ai": ("langchain_azure_ai.chat_models", "AzureAIChatCompletionsModel", _call),
     "azure_openai": ("langchain_openai", "AzureChatOpenAI", _call),
@@ -507,6 +517,10 @@ def _attempt_infer_model_provider(model_name: str) -> str | None:
         The inferred provider name, or `None` if no provider could be inferred.
     """
     model_lower = model_name.lower()
+
+    # RainyModel (Orcest AI unified LLM proxy)
+    if model_lower.startswith("rainymodel"):
+        return "rainymodel"
 
     # OpenAI models (including newer models and aliases)
     if any(
