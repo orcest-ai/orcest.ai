@@ -322,18 +322,19 @@ document.addEventListener('DOMContentLoaded', function() {
 </a>
 
 <!-- Lamino -->
-<a href="https://llm.orcest.ai" class="service-card">
+<a href="/lamino" class="service-card">
 <div class="service-header">
 <span class="service-tag tag-chat">AI Chat</span>
 <div class="service-status"></div>
 </div>
 <h3 class="service-title">Lamino</h3>
-<p class="service-description">Advanced AI chat interface with RAG capabilities, document processing, workspace management, and collaborative features powered by RainyModel.</p>
-<span class="service-url">llm.orcest.ai →</span>
+<p class="service-description">Advanced AI chat with SSO authentication, per-user workspaces, file upload, model selection, RainyModel auto-connect, and decision chain tracking.</p>
+<span class="service-url">orcest.ai/lamino →</span>
 <div class="service-features">
-<span class="feature-tag">RAG Support</span>
-<span class="feature-tag">Document AI</span>
+<span class="feature-tag">SSO Only</span>
 <span class="feature-tag">Workspaces</span>
+<span class="feature-tag">File Upload</span>
+<span class="feature-tag">Decision Chain</span>
 </div>
 </a>
 
@@ -1122,7 +1123,7 @@ flowchart TD
   langsmithNode["LangSmith"]
   deploymentNode["LangSmith Deployment"]
 
-  laminoNode["llm.orcest.ai"]
+  laminoNode["Lamino Chat (SSO)"]
   maestristNode["agent.orcest.ai"]
   orcideNode["ide.orcest.ai"]
   statusNode["status.orcest.ai"]
@@ -1215,3 +1216,9 @@ async def _is_authenticated_token(token: str) -> bool:
 async def flowchart_page():
     """Public flowchart page for system architecture."""
     return HTMLResponse(content=_fc_html())
+
+
+# --- Mount Lamino Chat Module ---
+from app.lamino import router as lamino_router  # noqa: E402
+
+app.include_router(lamino_router, prefix="/lamino", tags=["lamino"])

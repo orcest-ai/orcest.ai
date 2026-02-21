@@ -29,3 +29,23 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.12"
+      - key: RAINYMODEL_BASE_URL
+        sync: false
+      - key: RAINYMODEL_MASTER_KEY
+        sync: false
+      - key: SSO_ISSUER
+        value: "https://login.orcest.ai"
+      - key: SSO_CLIENT_ID
+        value: "orcest"
+      - key: SSO_CLIENT_SECRET
+        sync: false
+      - key: LAMINO_SSO_CLIENT_SECRET
+        sync: false
+      - key: LAMINO_SSO_CALLBACK_URL
+        value: "https://orcest.ai/lamino/auth/callback"
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OLLAMAFREE_API_KEY
+        sync: false
+      - key: OLLAMAFREE_API_BASE
+        value: "https://ollamafreeapi.orcest.ai"
