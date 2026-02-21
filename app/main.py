@@ -82,6 +82,8 @@ LANGCHAIN_ORCEST_ENDPOINTS = {
     "langsmith": "https://orcest.ai/api/langchain/langsmith",
     "langsmith_deployment": "https://orcest.ai/api/langchain/langsmith-deployment",
     "langchain_ui": "https://orcest.ai/orchestration/langchain",
+    "rainymodel_ui": "https://orcest.ai/orchestration/rainymodel",
+    "rainymodel_manifest_schema": "https://orcest.ai/api/rainymodel/langchain-manifest/schema",
 }
 
 
@@ -653,12 +655,36 @@ async def langchain_agent_run(payload: LangChainAgentRunRequest):
 @app.get("/api/rainymodel/langchain-manifest")
 async def rainymodel_langchain_manifest():
     return {
+        "manifest_version": "1.1.0",
+        "schema_endpoint": LANGCHAIN_ORCEST_ENDPOINTS["rainymodel_manifest_schema"],
         "consumer": "RainyModel",
         "target": "Orcest LangChain API",
         "recommended_endpoint": LANGCHAIN_ORCEST_ENDPOINTS["run_agent"],
         "health_endpoint": LANGCHAIN_ORCEST_ENDPOINTS["health"],
         "ecosystem_endpoint": LANGCHAIN_ORCEST_ENDPOINTS["ecosystem"],
         "routing_policy_hint": "RainyModel should include Orcest LangChain API as one upstream endpoint",
+        "auth": {
+            "required": True,
+            "mode": "SSO for console, API key for service-to-service",
+            "issuer": SSO_ISSUER,
+        },
+        "capabilities": {
+            "supports_component_discovery": True,
+            "supports_health_probe": True,
+            "supports_agent_execution": True,
+            "supports_ui_console": True,
+        },
+        "examples": {
+            "agent_run_post": {
+                "url": LANGCHAIN_ORCEST_ENDPOINTS["run_agent"],
+                "method": "POST",
+                "body": {"query": "Plan a multi-step migration", "agent_type": "general", "metadata": {"source": "RainyModel"}},
+            },
+            "health_get": {
+                "url": LANGCHAIN_ORCEST_ENDPOINTS["health"],
+                "method": "GET",
+            },
+        },
         "access_map": {
             "deep_agents": {
                 "endpoint": LANGCHAIN_ORCEST_ENDPOINTS["deep_agents"],
@@ -692,7 +718,32 @@ async def rainymodel_langchain_manifest():
             },
         },
         "ui_console": LANGCHAIN_ORCEST_ENDPOINTS["langchain_ui"],
+        "rainymodel_console": LANGCHAIN_ORCEST_ENDPOINTS["rainymodel_ui"],
         "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/api/rainymodel/langchain-manifest/schema")
+async def rainymodel_langchain_manifest_schema():
+    return {
+        "name": "RainyModel LangChain Manifest Schema",
+        "version": "1.1.0",
+        "required_fields": [
+            "manifest_version",
+            "consumer",
+            "target",
+            "recommended_endpoint",
+            "health_endpoint",
+            "ecosystem_endpoint",
+            "access_map",
+            "updated_at",
+        ],
+        "access_map_item_schema": {
+            "endpoint": "string (absolute URL)",
+            "method": "GET|POST",
+            "description": "string",
+        },
+        "notes": "RainyModel can validate manifest payload shape before consuming endpoint map.",
     }
 
 
@@ -809,12 +860,14 @@ a:hover{{text-decoration:underline}}
 <p><a href="/api/langchain/langsmith-deployment">/api/langchain/langsmith-deployment</a> – دسترسی LangSmith Deployment</p>
 <p><a href="/api/langchain/agent/run">/api/langchain/agent/run</a> – اجرای Agent روی API اورکست</p>
 <p><a href="/orchestration/langchain">/orchestration/langchain</a> – UI اختصاصی LangChain (SSO)</p>
+<p><a href="/orchestration/rainymodel">/orchestration/rainymodel</a> – UI اختصاصی RainyModel (SSO)</p>
 </div>
 <div class="card">
 <h3>RainyModel API</h3>
 <p>Base URL: <code>{RAINYMODEL_BASE_URL}</code></p>
 <p>استفاده با کلید API از داشبورد SSO.</p>
 <p>Manifest اتصال RainyModel به LangChain Orcest: <a href="/api/rainymodel/langchain-manifest">/api/rainymodel/langchain-manifest</a></p>
+<p>Manifest Schema: <a href="/api/rainymodel/langchain-manifest/schema">/api/rainymodel/langchain-manifest/schema</a></p>
 </div>
 <p><a href="https://orcest.ai">← بازگشت به صفحه اصلی</a> | <a href="https://github.com/langchain-ai/langchain" target="_blank" rel="noopener">LangChain</a> | <a href="https://login.orcest.ai/logout">خروج</a></p>
 </div></body></html>"""
@@ -856,6 +909,8 @@ pre{white-space:pre-wrap;word-break:break-word;color:#cbd5e1;font-size:.86rem}
 <div class="panel"><pre id="out">Select any component to load JSON response...</pre></div>
 <div class="toplinks row">
   <a class="btn" href="/orchestration">Back to Orchestration</a>
+  <a class="btn" href="/orchestration/rainymodel">RainyModel Console</a>
+  <a class="btn" href="/api/rainymodel/langchain-manifest/schema">Manifest Schema</a>
   <a class="btn" href="https://github.com/langchain-ai/langchain" target="_blank" rel="noopener">LangChain Repo</a>
   <a class="btn" href="https://login.orcest.ai/logout">Logout</a>
 </div>
@@ -872,6 +927,65 @@ async function callApi(path){
     out.textContent = 'Request failed: ' + e.message;
   }
 }
+</script>
+</body></html>"""
+
+
+def _rainymodel_console_html():
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Orcest RainyModel Console</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:system-ui;background:#0a0a0f;color:#e0e0e0;min-height:100vh;padding:28px}}
+.container{{max-width:980px;margin:0 auto}}
+h1{{background:linear-gradient(135deg,#60a5fa,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:10px}}
+p.sub{{color:#94a3b8;margin-bottom:18px}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-bottom:18px}}
+.card{{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:16px}}
+.card h3{{color:#f8fafc;margin-bottom:8px;font-size:1rem}}
+.card p{{color:#94a3b8;font-size:.92rem;margin-bottom:10px}}
+.row{{display:flex;gap:8px;flex-wrap:wrap}}
+button,a.btn{{background:#1f2937;color:#e2e8f0;border:1px solid #334155;border-radius:8px;padding:8px 12px;cursor:pointer;text-decoration:none;font-size:.86rem}}
+button:hover,a.btn:hover{{border-color:#60a5fa;color:#60a5fa}}
+.panel{{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:14px}}
+pre{{white-space:pre-wrap;word-break:break-word;color:#cbd5e1;font-size:.86rem}}
+.toplinks{{margin-top:12px}}
+.hint{{margin-top:10px;color:#94a3b8;font-size:.9rem}}
+</style></head>
+<body>
+<div class="container">
+<h1>Orcest RainyModel Console</h1>
+<p class="sub">SSO dashboard for RainyModel access to Orcest LangChain APIs. Use per-component links or load manifest/schema.</p>
+<div class="grid">
+  <div class="card"><h3>Manifest</h3><p>Full RainyModel integration manifest with access map and examples.</p><div class="row"><button onclick="callApi('/api/rainymodel/langchain-manifest')">Open Manifest</button></div></div>
+  <div class="card"><h3>Manifest Schema</h3><p>Schema to validate manifest payload before consumption.</p><div class="row"><button onclick="callApi('/api/rainymodel/langchain-manifest/schema')">Open Schema</button></div></div>
+  <div class="card"><h3>Deep Agents Access</h3><p>RainyModel mapped endpoint for planning/subagent scenarios.</p><div class="row"><a class="btn" href="/api/langchain/deep-agents" target="_blank">Open Endpoint</a></div></div>
+  <div class="card"><h3>LangGraph Access</h3><p>Mapped endpoint for stateful workflow orchestration.</p><div class="row"><a class="btn" href="/api/langchain/langgraph" target="_blank">Open Endpoint</a></div></div>
+  <div class="card"><h3>LangSmith Access</h3><p>Mapped endpoint for observability and evals.</p><div class="row"><a class="btn" href="/api/langchain/langsmith" target="_blank">Open Endpoint</a></div></div>
+  <div class="card"><h3>Execution Endpoint</h3><p>Unified POST entrypoint RainyModel can use upstream.</p><div class="row"><a class="btn" href="/api/langchain/agent/run" target="_blank">Open Endpoint</a></div></div>
+</div>
+<div class="panel"><pre id="out">Select any item to load JSON response...</pre></div>
+<p class="hint">RainyModel Base URL: <code>{RAINYMODEL_BASE_URL}</code></p>
+<div class="toplinks row">
+  <a class="btn" href="/orchestration">Back to Orchestration</a>
+  <a class="btn" href="/orchestration/langchain">LangChain Console</a>
+  <a class="btn" href="/fc">System Diagram</a>
+  <a class="btn" href="https://login.orcest.ai/logout">Logout</a>
+</div>
+</div>
+<script>
+async function callApi(path){{
+  const out = document.getElementById('out');
+  out.textContent = 'Loading ' + path + ' ...';
+  try {{
+    const res = await fetch(path, {{headers: {{'Accept':'application/json'}}}});
+    const data = await res.json();
+    out.textContent = JSON.stringify(data, null, 2);
+  }} catch (e) {{
+    out.textContent = 'Request failed: ' + e.message;
+  }}
+}}
 </script>
 </body></html>"""
 
@@ -1062,6 +1176,15 @@ async def langchain_console_page(request: Request):
     if await _is_authenticated_token(token):
         return HTMLResponse(content=_langchain_console_html())
     return RedirectResponse(url=_auth_url_with_state("/orchestration/langchain"), status_code=302)
+
+
+@app.get("/orchestration/rainymodel", response_class=HTMLResponse)
+async def rainymodel_console_page(request: Request):
+    """SSO-protected console for RainyModel manifest and access map usage."""
+    token = request.cookies.get(ORCEST_SSO_COOKIE) or request.headers.get("Authorization", "").replace("Bearer ", "")
+    if await _is_authenticated_token(token):
+        return HTMLResponse(content=_rainymodel_console_html())
+    return RedirectResponse(url=_auth_url_with_state("/orchestration/rainymodel"), status_code=302)
 
 
 def _auth_url_with_state(return_to: str) -> str:
