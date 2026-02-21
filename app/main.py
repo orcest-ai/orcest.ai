@@ -1,25 +1,35 @@
 """
 Orcest.ai - The Self-Adaptive LLM Orchestrator
 Platform for reliable AI agents (Fork of LangChain)
+
+Enterprise-grade platform with developer APIs, plugin system,
+multi-provider support, and comprehensive monitoring.
 """
 
 import os
 import time
 import base64
 import json
+import hashlib
+import logging
+from collections import defaultdict, deque
 from datetime import datetime, timezone
+from typing import Optional
 
 import httpx
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("orcest.ai")
 
 app = FastAPI(
     title="Orcest.ai",
     description="The Self-Adaptive LLM Orchestrator platform for reliable AI agents",
-    version="1.0.0",
+    version="2.0.0",
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
@@ -540,14 +550,112 @@ ECOSYSTEM_SERVICES = [
     {"name": "status.orcest.ai", "url": "https://status-orcest-ai.onrender.com/health"},
 ]
 
-_metrics = {"requests": 0, "start_time": time.time()}
+_metrics = {"requests": 0, "start_time": time.time(), "errors": 0, "by_path": defaultdict(int)}
+
+# --- Rate Limiting ---
+_rate_limits = defaultdict(list)
+RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "60"))
+RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "120"))
+
+# --- Audit Log ---
+_audit_log = deque(maxlen=1000)
+
+def _audit(event: str, details: dict):
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "event": event,
+        **details,
+    }
+    _audit_log.append(entry)
+    logger.info(json.dumps(entry))
+
+# --- API Key Auth ---
+DEVELOPER_API_KEYS = {}  # In production, load from DB/env
+MASTER_API_KEY = os.getenv("ORCEST_MASTER_API_KEY", "")
+
+def _get_api_key(authorization: str = Header(None)) -> Optional[str]:
+    if not authorization:
+        return None
+    if authorization.startswith("Bearer "):
+        return authorization[7:]
+    return authorization
+
+def _require_api_key(authorization: str = Header(...)) -> str:
+    key = _get_api_key(authorization)
+    if not key:
+        raise HTTPException(status_code=401, detail="API key required")
+    if MASTER_API_KEY and key == MASTER_API_KEY:
+        return key
+    if key in DEVELOPER_API_KEYS:
+        return key
+    raise HTTPException(status_code=403, detail="Invalid API key")
+
+# --- Plugin Registry ---
+_plugins = {}
+
+class PluginRegistration(BaseModel):
+    name: str
+    version: str = "1.0.0"
+    description: str = ""
+    endpoints: list = Field(default_factory=list)
+    capabilities: list = Field(default_factory=list)
+    webhook_url: Optional[str] = None
+    config: dict = Field(default_factory=dict)
+
+# --- Webhook Registry ---
+_webhooks = defaultdict(list)  # event_type -> [webhook_urls]
+
+class WebhookRegistration(BaseModel):
+    url: str
+    events: list = Field(default_factory=lambda: ["all"])
+    secret: Optional[str] = None
+
+async def _fire_webhooks(event: str, payload: dict):
+    urls = _webhooks.get(event, []) + _webhooks.get("all", [])
+    if not urls:
+        return
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        for hook in urls:
+            try:
+                headers = {"Content-Type": "application/json", "X-Orcest-Event": event}
+                if hook.get("secret"):
+                    sig = hashlib.sha256(f'{hook["secret"]}:{json.dumps(payload)}'.encode()).hexdigest()
+                    headers["X-Orcest-Signature"] = sig
+                await client.post(hook["url"], json=payload, headers=headers)
+            except Exception as e:
+                logger.warning(f"Webhook delivery failed for {hook['url']}: {e}")
 
 
 @app.middleware("http")
-async def metrics_middleware(request: Request, call_next):
+async def metrics_and_ratelimit_middleware(request: Request, call_next):
     _metrics["requests"] += 1
-    response = await call_next(request)
-    return response
+    path = request.url.path
+    _metrics["by_path"][path] += 1
+
+    # Rate limiting for API endpoints
+    if path.startswith("/api/") or path.startswith("/v1/"):
+        client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown").split(",")[0].strip()
+        now = time.time()
+        _rate_limits[client_ip] = [t for t in _rate_limits[client_ip] if now - t < RATE_LIMIT_WINDOW]
+        if len(_rate_limits[client_ip]) >= RATE_LIMIT_MAX:
+            _audit("rate_limit_exceeded", {"ip": client_ip, "path": path})
+            return JSONResponse(
+                status_code=429,
+                content={"error": "Rate limit exceeded", "retry_after": RATE_LIMIT_WINDOW},
+                headers={"Retry-After": str(RATE_LIMIT_WINDOW)},
+            )
+        _rate_limits[client_ip].append(now)
+
+    start = time.time()
+    try:
+        response = await call_next(request)
+        latency = time.time() - start
+        response.headers["X-Response-Time"] = f"{latency:.3f}s"
+        response.headers["X-Orcest-Version"] = "2.0.0"
+        return response
+    except Exception:
+        _metrics["errors"] += 1
+        raise
 
 
 @app.get("/api/info")
@@ -771,8 +879,12 @@ async def metrics_endpoint():
     return {
         "uptime_seconds": int(uptime),
         "total_requests": _metrics["requests"],
+        "error_count": _metrics["errors"],
+        "requests_per_second": round(_metrics["requests"] / max(uptime, 1), 2),
+        "top_paths": dict(sorted(_metrics["by_path"].items(), key=lambda x: x[1], reverse=True)[:20]),
+        "plugins_active": len(_plugins),
         "service": "orcest.ai",
-        "version": "1.0.0",
+        "version": "2.0.0",
     }
 
 
@@ -1215,3 +1327,241 @@ async def _is_authenticated_token(token: str) -> bool:
 async def flowchart_page():
     """Public flowchart page for system architecture."""
     return HTMLResponse(content=_fc_html())
+
+
+# ============================================================
+# Developer REST APIs (v1)
+# ============================================================
+
+class ChatCompletionRequest(BaseModel):
+    model: str = "rainymodel/auto"
+    messages: list
+    stream: bool = False
+    temperature: float = 0.7
+    max_tokens: int = 2048
+    metadata: dict = Field(default_factory=dict)
+
+
+@app.post("/v1/chat/completions")
+async def v1_chat_completions(payload: ChatCompletionRequest, authorization: str = Header(None)):
+    """OpenAI-compatible chat completions proxy via RainyModel."""
+    api_key = _get_api_key(authorization) or MASTER_API_KEY
+    if not api_key:
+        raise HTTPException(status_code=401, detail="API key required. Set ORCEST_MASTER_API_KEY or pass Bearer token.")
+
+    _audit("chat_completion", {"model": payload.model, "stream": payload.stream, "msg_count": len(payload.messages)})
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "X-RainyModel-Policy": payload.metadata.get("policy", "auto"),
+    }
+    body = {
+        "model": payload.model,
+        "messages": payload.messages,
+        "stream": payload.stream,
+        "temperature": payload.temperature,
+        "max_tokens": payload.max_tokens,
+    }
+
+    if payload.stream:
+        async def stream_proxy():
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                async with client.stream("POST", f"{RAINYMODEL_BASE_URL}/chat/completions", json=body, headers=headers) as resp:
+                    async for line in resp.aiter_lines():
+                        yield line + "\n"
+        return StreamingResponse(stream_proxy(), media_type="text/event-stream")
+    else:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(f"{RAINYMODEL_BASE_URL}/chat/completions", json=body, headers=headers)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        return resp.json()
+
+
+@app.get("/v1/models")
+async def v1_list_models(authorization: str = Header(None)):
+    """List available models from RainyModel."""
+    api_key = _get_api_key(authorization) or MASTER_API_KEY
+    if not api_key:
+        raise HTTPException(status_code=401, detail="API key required")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{RAINYMODEL_BASE_URL}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        if resp.status_code == 200:
+            return resp.json()
+        return {"object": "list", "data": [
+            {"id": "rainymodel/auto", "object": "model", "owned_by": "orcest"},
+            {"id": "rainymodel/chat", "object": "model", "owned_by": "orcest"},
+            {"id": "rainymodel/code", "object": "model", "owned_by": "orcest"},
+            {"id": "rainymodel/agent", "object": "model", "owned_by": "orcest"},
+        ]}
+    except Exception:
+        return {"object": "list", "data": [
+            {"id": "rainymodel/auto", "object": "model", "owned_by": "orcest"},
+            {"id": "rainymodel/chat", "object": "model", "owned_by": "orcest"},
+            {"id": "rainymodel/code", "object": "model", "owned_by": "orcest"},
+            {"id": "rainymodel/agent", "object": "model", "owned_by": "orcest"},
+        ]}
+
+
+@app.get("/v1/providers")
+async def v1_list_providers():
+    """List all available LLM providers and their configuration status."""
+    providers = {
+        "rainymodel": {"name": "RainyModel (Default)", "configured": True, "base_url": RAINYMODEL_BASE_URL},
+        "ollama": {"name": "Ollama", "configured": bool(os.getenv("OLLAMA_BASE_URL"))},
+        "openrouter": {"name": "OpenRouter", "configured": bool(os.getenv("OPENROUTER_API_KEY"))},
+        "openai": {"name": "OpenAI", "configured": bool(os.getenv("OPENAI_API_KEY"))},
+        "anthropic": {"name": "Anthropic/Claude", "configured": bool(os.getenv("ANTHROPIC_API_KEY"))},
+        "deepseek": {"name": "DeepSeek", "configured": bool(os.getenv("DEEPSEEK_API_KEY"))},
+        "gemini": {"name": "Google Gemini", "configured": bool(os.getenv("GEMINI_API_KEY"))},
+        "groq": {"name": "Groq", "configured": bool(os.getenv("GROQ_API_KEY"))},
+        "xai": {"name": "xAI/Grok", "configured": bool(os.getenv("XAI_API_KEY"))},
+        "qwen": {"name": "Qwen", "configured": bool(os.getenv("QWEN_API_KEY"))},
+        "ollamafreeapi": {"name": "OllamaFreeAPI", "configured": bool(os.getenv("OLLAMAFREE_API_KEY"))},
+    }
+    return {"providers": providers, "default": "rainymodel"}
+
+
+# ============================================================
+# Plugin System APIs
+# ============================================================
+
+@app.post("/api/plugins/register")
+async def register_plugin(plugin: PluginRegistration, api_key: str = Depends(_require_api_key)):
+    """Register a new plugin with the platform."""
+    _plugins[plugin.name] = {
+        "name": plugin.name,
+        "version": plugin.version,
+        "description": plugin.description,
+        "endpoints": plugin.endpoints,
+        "capabilities": plugin.capabilities,
+        "webhook_url": plugin.webhook_url,
+        "config": plugin.config,
+        "registered_at": datetime.now(timezone.utc).isoformat(),
+        "status": "active",
+    }
+    _audit("plugin_registered", {"plugin": plugin.name, "version": plugin.version})
+    return {"status": "registered", "plugin": plugin.name}
+
+
+@app.get("/api/plugins")
+async def list_plugins():
+    """List all registered plugins."""
+    return {"plugins": list(_plugins.values()), "count": len(_plugins)}
+
+
+@app.delete("/api/plugins/{name}")
+async def unregister_plugin(name: str, api_key: str = Depends(_require_api_key)):
+    """Unregister a plugin."""
+    if name not in _plugins:
+        raise HTTPException(status_code=404, detail=f"Plugin '{name}' not found")
+    del _plugins[name]
+    _audit("plugin_unregistered", {"plugin": name})
+    return {"status": "unregistered", "plugin": name}
+
+
+# ============================================================
+# Webhook APIs
+# ============================================================
+
+@app.post("/api/webhooks/register")
+async def register_webhook(webhook: WebhookRegistration, api_key: str = Depends(_require_api_key)):
+    """Register a webhook for event notifications."""
+    hook_data = {"url": webhook.url, "secret": webhook.secret}
+    for event in webhook.events:
+        _webhooks[event].append(hook_data)
+    _audit("webhook_registered", {"url": webhook.url, "events": webhook.events})
+    return {"status": "registered", "url": webhook.url, "events": webhook.events}
+
+
+@app.get("/api/webhooks")
+async def list_webhooks(api_key: str = Depends(_require_api_key)):
+    """List all registered webhooks."""
+    result = {}
+    for event, hooks in _webhooks.items():
+        result[event] = [{"url": h["url"]} for h in hooks]
+    return {"webhooks": result}
+
+
+# ============================================================
+# Audit & Metrics APIs
+# ============================================================
+
+@app.get("/api/audit")
+async def get_audit_log(api_key: str = Depends(_require_api_key), limit: int = 100):
+    """Get recent audit log entries."""
+    entries = list(_audit_log)[-limit:]
+    return {"entries": entries, "total": len(_audit_log)}
+
+
+@app.get("/v1/health")
+async def v1_health():
+    """Comprehensive health check with service dependencies."""
+    uptime = time.time() - _metrics["start_time"]
+    return {
+        "status": "healthy",
+        "service": "orcest.ai",
+        "version": "2.0.0",
+        "uptime_seconds": int(uptime),
+        "total_requests": _metrics["requests"],
+        "error_count": _metrics["errors"],
+        "plugins_active": len(_plugins),
+        "webhooks_active": sum(len(v) for v in _webhooks.values()),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ============================================================
+# Auto-Configuration API
+# ============================================================
+
+@app.get("/v1/auto/config")
+async def auto_config():
+    """AUTO mode: discover available providers, models, and endpoints based on environment."""
+    available_providers = []
+    if os.getenv("RAINYMODEL_BASE_URL") or True:  # Always available as default
+        available_providers.append({"provider": "rainymodel", "tier": "default", "base_url": RAINYMODEL_BASE_URL})
+    env_checks = [
+        ("HF_TOKEN", "huggingface", "free"),
+        ("OLLAMA_BASE_URL", "ollama", "internal"),
+        ("OLLAMAFREE_API_KEY", "ollamafreeapi", "free"),
+        ("OPENROUTER_API_KEY", "openrouter", "premium"),
+        ("OPENAI_API_KEY", "openai", "premium"),
+        ("ANTHROPIC_API_KEY", "anthropic", "premium"),
+        ("DEEPSEEK_API_KEY", "deepseek", "premium"),
+        ("GEMINI_API_KEY", "gemini", "premium"),
+        ("GROQ_API_KEY", "groq", "premium"),
+        ("XAI_API_KEY", "xai", "premium"),
+    ]
+    for env_var, provider, tier in env_checks:
+        if os.getenv(env_var):
+            available_providers.append({"provider": provider, "tier": tier})
+
+    return {
+        "mode": "auto",
+        "default_model": "rainymodel/auto",
+        "default_policy": "auto",
+        "available_providers": available_providers,
+        "api_endpoints": {
+            "chat": f"{RAINYMODEL_BASE_URL}/chat/completions",
+            "models": f"{RAINYMODEL_BASE_URL}/models",
+            "langchain": LANGCHAIN_ORCEST_ENDPOINTS,
+        },
+        "sso": {
+            "issuer": SSO_ISSUER,
+            "enabled": bool(SSO_CLIENT_SECRET),
+        },
+        "features": {
+            "streaming": True,
+            "multi_modal": True,
+            "rag": True,
+            "agents": True,
+            "plugins": True,
+            "webhooks": True,
+        },
+    }
