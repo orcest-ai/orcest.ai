@@ -76,6 +76,12 @@ LANGCHAIN_ORCEST_ENDPOINTS = {
     "health": "https://orcest.ai/api/langchain/health",
     "run_agent": "https://orcest.ai/api/langchain/agent/run",
     "rainymodel_manifest": "https://orcest.ai/api/rainymodel/langchain-manifest",
+    "deep_agents": "https://orcest.ai/api/langchain/deep-agents",
+    "langgraph": "https://orcest.ai/api/langchain/langgraph",
+    "integrations": "https://orcest.ai/api/langchain/integrations",
+    "langsmith": "https://orcest.ai/api/langchain/langsmith",
+    "langsmith_deployment": "https://orcest.ai/api/langchain/langsmith-deployment",
+    "langchain_ui": "https://orcest.ai/orchestration/langchain",
 }
 
 
@@ -585,6 +591,50 @@ async def langchain_ecosystem():
     }
 
 
+def _langchain_component_response(component_key: str):
+    component = LANGCHAIN_ECOSYSTEM[component_key]
+    return {
+        "component": component,
+        "access": {
+            "type": "internal_endpoint",
+            "endpoint": LANGCHAIN_ORCEST_ENDPOINTS[component_key],
+            "method": "GET",
+            "sso_ui": LANGCHAIN_ORCEST_ENDPOINTS["langchain_ui"],
+        },
+        "rainymodel": {
+            "proxy_base": RAINYMODEL_BASE_URL,
+            "recommended_upstream": LANGCHAIN_ORCEST_ENDPOINTS["run_agent"],
+            "component_hint": component_key,
+        },
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/api/langchain/deep-agents")
+async def langchain_deep_agents():
+    return _langchain_component_response("deep_agents")
+
+
+@app.get("/api/langchain/langgraph")
+async def langchain_langgraph():
+    return _langchain_component_response("langgraph")
+
+
+@app.get("/api/langchain/integrations")
+async def langchain_integrations():
+    return _langchain_component_response("integrations")
+
+
+@app.get("/api/langchain/langsmith")
+async def langchain_langsmith():
+    return _langchain_component_response("langsmith")
+
+
+@app.get("/api/langchain/langsmith-deployment")
+async def langchain_langsmith_deployment():
+    return _langchain_component_response("langsmith_deployment")
+
+
 @app.post("/api/langchain/agent/run")
 async def langchain_agent_run(payload: LangChainAgentRunRequest):
     return {
@@ -609,6 +659,39 @@ async def rainymodel_langchain_manifest():
         "health_endpoint": LANGCHAIN_ORCEST_ENDPOINTS["health"],
         "ecosystem_endpoint": LANGCHAIN_ORCEST_ENDPOINTS["ecosystem"],
         "routing_policy_hint": "RainyModel should include Orcest LangChain API as one upstream endpoint",
+        "access_map": {
+            "deep_agents": {
+                "endpoint": LANGCHAIN_ORCEST_ENDPOINTS["deep_agents"],
+                "method": "GET",
+                "description": "Planning-oriented agent access with subagent and filesystem patterns.",
+            },
+            "langgraph": {
+                "endpoint": LANGCHAIN_ORCEST_ENDPOINTS["langgraph"],
+                "method": "GET",
+                "description": "Reliable low-level graph orchestration and stateful workflow access.",
+            },
+            "integrations": {
+                "endpoint": LANGCHAIN_ORCEST_ENDPOINTS["integrations"],
+                "method": "GET",
+                "description": "Provider/tool integration catalog for model and toolkit discovery.",
+            },
+            "langsmith": {
+                "endpoint": LANGCHAIN_ORCEST_ENDPOINTS["langsmith"],
+                "method": "GET",
+                "description": "Observability, eval, and production debugging access surface.",
+            },
+            "langsmith_deployment": {
+                "endpoint": LANGCHAIN_ORCEST_ENDPOINTS["langsmith_deployment"],
+                "method": "GET",
+                "description": "Deployment and scale guidance for long-running stateful agent workflows.",
+            },
+            "agent_run": {
+                "endpoint": LANGCHAIN_ORCEST_ENDPOINTS["run_agent"],
+                "method": "POST",
+                "description": "Unified execution entrypoint that RainyModel can call as an upstream.",
+            },
+        },
+        "ui_console": LANGCHAIN_ORCEST_ENDPOINTS["langchain_ui"],
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -719,7 +802,13 @@ a:hover{{text-decoration:underline}}
 <p><a href="/health">/health</a> – وضعیت سرویس</p>
 <p><a href="/ecosystem/health">/ecosystem/health</a> – سلامت اکوسیستم</p>
 <p><a href="/api/langchain/ecosystem">/api/langchain/ecosystem</a> – اجزای کامل LangChain</p>
+<p><a href="/api/langchain/deep-agents">/api/langchain/deep-agents</a> – دسترسی Deep Agents</p>
+<p><a href="/api/langchain/langgraph">/api/langchain/langgraph</a> – دسترسی LangGraph</p>
+<p><a href="/api/langchain/integrations">/api/langchain/integrations</a> – دسترسی Integrations</p>
+<p><a href="/api/langchain/langsmith">/api/langchain/langsmith</a> – دسترسی LangSmith</p>
+<p><a href="/api/langchain/langsmith-deployment">/api/langchain/langsmith-deployment</a> – دسترسی LangSmith Deployment</p>
 <p><a href="/api/langchain/agent/run">/api/langchain/agent/run</a> – اجرای Agent روی API اورکست</p>
+<p><a href="/orchestration/langchain">/orchestration/langchain</a> – UI اختصاصی LangChain (SSO)</p>
 </div>
 <div class="card">
 <h3>RainyModel API</h3>
@@ -731,21 +820,99 @@ a:hover{{text-decoration:underline}}
 </div></body></html>"""
 
 
+def _langchain_console_html():
+    return """<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Orcest LangChain Console</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui;background:#0a0a0f;color:#e0e0e0;min-height:100vh;padding:28px}
+.container{max-width:980px;margin:0 auto}
+h1{background:linear-gradient(135deg,#60a5fa,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:10px}
+p.sub{color:#94a3b8;margin-bottom:22px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-bottom:18px}
+.card{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:16px}
+.card h3{color:#f8fafc;margin-bottom:8px;font-size:1rem}
+.card p{color:#94a3b8;font-size:.92rem;margin-bottom:10px}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+button,a.btn{background:#1f2937;color:#e2e8f0;border:1px solid #334155;border-radius:8px;padding:8px 12px;cursor:pointer;text-decoration:none;font-size:.86rem}
+button:hover,a.btn:hover{border-color:#60a5fa;color:#60a5fa}
+.panel{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:14px}
+pre{white-space:pre-wrap;word-break:break-word;color:#cbd5e1;font-size:.86rem}
+.toplinks{margin-top:12px}
+</style></head>
+<body>
+<div class="container">
+<h1>Orcest LangChain Console</h1>
+<p class="sub">Simple SSO-protected UI to access Deep Agents, LangGraph, Integrations, LangSmith and LangSmith Deployment through internal Orcest endpoints.</p>
+<div class="grid">
+  <div class="card"><h3>Deep Agents</h3><p>Planning, subagents, and filesystem-driven complex tasks.</p><div class="row"><button onclick="callApi('/api/langchain/deep-agents')">Open Endpoint</button></div></div>
+  <div class="card"><h3>LangGraph</h3><p>Reliable orchestration with state, memory, and HITL patterns.</p><div class="row"><button onclick="callApi('/api/langchain/langgraph')">Open Endpoint</button></div></div>
+  <div class="card"><h3>Integrations</h3><p>Providers, tools, toolkits and integration catalog access.</p><div class="row"><button onclick="callApi('/api/langchain/integrations')">Open Endpoint</button></div></div>
+  <div class="card"><h3>LangSmith</h3><p>Observability, evals, tracing, and production debugging.</p><div class="row"><button onclick="callApi('/api/langchain/langsmith')">Open Endpoint</button></div></div>
+  <div class="card"><h3>LangSmith Deployment</h3><p>Deploy and scale stateful long-running agent workflows.</p><div class="row"><button onclick="callApi('/api/langchain/langsmith-deployment')">Open Endpoint</button></div></div>
+  <div class="card"><h3>RainyModel Access Map</h3><p>Per-component RainyModel integration and endpoint mapping.</p><div class="row"><button onclick="callApi('/api/rainymodel/langchain-manifest')">Open Manifest</button></div></div>
+</div>
+<div class="panel"><pre id="out">Select any component to load JSON response...</pre></div>
+<div class="toplinks row">
+  <a class="btn" href="/orchestration">Back to Orchestration</a>
+  <a class="btn" href="https://github.com/langchain-ai/langchain" target="_blank" rel="noopener">LangChain Repo</a>
+  <a class="btn" href="https://login.orcest.ai/logout">Logout</a>
+</div>
+</div>
+<script>
+async function callApi(path){
+  const out = document.getElementById('out');
+  out.textContent = 'Loading ' + path + ' ...';
+  try {
+    const res = await fetch(path, {headers: {'Accept':'application/json'}});
+    const data = await res.json();
+    out.textContent = JSON.stringify(data, null, 2);
+  } catch (e) {
+    out.textContent = 'Request failed: ' + e.message;
+  }
+}
+</script>
+</body></html>"""
+
+
 @app.get("/orchestration", response_class=HTMLResponse)
 async def orchestration_page(request: Request):
     """Orcest AI Orchestration - LangChain-based service (requires SSO)"""
     token = request.cookies.get(ORCEST_SSO_COOKIE) or request.headers.get("Authorization", "").replace("Bearer ", "")
-    if not token and not SSO_CLIENT_SECRET:
+    if await _is_authenticated_token(token):
         return HTMLResponse(content=_orchestration_html())
+    return RedirectResponse(url=_auth_url_with_state("/orchestration"), status_code=302)
 
-    if token and SSO_CLIENT_SECRET:
-        async with httpx.AsyncClient() as client:
-            verify_res = await client.post(
-                f"{SSO_ISSUER}/api/token/verify",
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            )
-        if verify_res.status_code == 200 and verify_res.json().get("valid"):
-            return HTMLResponse(content=_orchestration_html())
 
-    auth_url = f"{SSO_ISSUER}/oauth2/authorize?client_id={SSO_CLIENT_ID}&redirect_uri={SSO_CALLBACK_URL}&response_type=code&scope=openid%20profile%20email"
-    return RedirectResponse(url=auth_url, status_code=302)
+@app.get("/orchestration/langchain", response_class=HTMLResponse)
+async def langchain_console_page(request: Request):
+    """SSO-protected simple UI for internal LangChain component access."""
+    token = request.cookies.get(ORCEST_SSO_COOKIE) or request.headers.get("Authorization", "").replace("Bearer ", "")
+    if await _is_authenticated_token(token):
+        return HTMLResponse(content=_langchain_console_html())
+    return RedirectResponse(url=_auth_url_with_state("/orchestration/langchain"), status_code=302)
+
+
+def _auth_url_with_state(return_to: str) -> str:
+    state_obj = {"returnTo": return_to}
+    state_raw = json.dumps(state_obj).encode("utf-8")
+    encoded_state = base64.urlsafe_b64encode(state_raw).decode("utf-8").rstrip("=")
+    return (
+        f"{SSO_ISSUER}/oauth2/authorize?client_id={SSO_CLIENT_ID}"
+        f"&redirect_uri={SSO_CALLBACK_URL}&response_type=code&scope=openid%20profile%20email"
+        f"&state={encoded_state}"
+    )
+
+
+async def _is_authenticated_token(token: str) -> bool:
+    if not token and not SSO_CLIENT_SECRET:
+        return True
+    if not token or not SSO_CLIENT_SECRET:
+        return False
+    async with httpx.AsyncClient() as client:
+        verify_res = await client.post(
+            f"{SSO_ISSUER}/api/token/verify",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        )
+    return verify_res.status_code == 200 and verify_res.json().get("valid")
